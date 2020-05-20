@@ -20,20 +20,17 @@
 """
 
 
+# MQTT server environment variables
 import os
 import sys
 import time
 import socket
 import json
 import cv2
-
 import logging as log
 import paho.mqtt.client as mqtt
-
 from argparse import ArgumentParser
 from inference import Network
-
-# MQTT server environment variables
 HOSTNAME = socket.gethostname()
 IPADDRESS = socket.gethostbyname(HOSTNAME)
 MQTT_HOST = IPADDRESS
@@ -44,14 +41,13 @@ MQTT_KEEPALIVE_INTERVAL = 60
 def build_argparser():
     """
     Parse command line arguments.
-
     :return: command line arguments
     """
     parser = ArgumentParser()
-    parser.add_argument("-m", "--model", required=True, type=str,
-                        help="Path to an xml file with a trained model.")
-    parser.add_argument("-i", "--input", required=True, type=str,
-                        help="Path to image or video file")
+    parser.add_argument("-m", "--model", required=False, type=str, default="model_1/frozen_inference_graph.xml",
+                        help="XML file path")
+    parser.add_argument("-i", "--input", required=False, type=str, default="./resources/Pedestrian_Detect_2_1_1.mp4",
+                        help="Input file path")
     parser.add_argument("-l", "--cpu_extension", required=False, type=str,
                         default=None,
                         help="MKLDNN (CPU)-targeted custom layers."
@@ -63,8 +59,7 @@ def build_argparser():
                              "will look for a suitable plugin for device "
                              "specified (CPU by default)")
     parser.add_argument("-pt", "--prob_threshold", type=float, default=0.5,
-                        help="Probability threshold for detections filtering"
-                        "(0.5 by default)")
+                        help="Probability threshold for detections filtering - default value 0.5")
     return parser
 
 
@@ -95,26 +90,26 @@ def infer_on_stream(args, client):
 
     ### TODO: Loop until stream is over ###
 
-        ### TODO: Read from the video capture ###
+    ### TODO: Read from the video capture ###
 
-        ### TODO: Pre-process the image as needed ###
+    ### TODO: Pre-process the image as needed ###
 
-        ### TODO: Start asynchronous inference for specified request ###
+    ### TODO: Start asynchronous inference for specified request ###
 
-        ### TODO: Wait for the result ###
+    ### TODO: Wait for the result ###
 
-            ### TODO: Get the results of the inference request ###
+    ### TODO: Get the results of the inference request ###
 
-            ### TODO: Extract any desired stats from the results ###
+    ### TODO: Extract any desired stats from the results ###
 
-            ### TODO: Calculate and send relevant information on ###
-            ### current_count, total_count and duration to the MQTT server ###
-            ### Topic "person": keys of "count" and "total" ###
-            ### Topic "person/duration": key of "duration" ###
+    ### TODO: Calculate and send relevant information on ###
+    ### current_count, total_count and duration to the MQTT server ###
+    ### Topic "person": keys of "count" and "total" ###
+    ### Topic "person/duration": key of "duration" ###
 
-        ### TODO: Send the frame to the FFMPEG server ###
+    ### TODO: Send the frame to the FFMPEG server ###
 
-        ### TODO: Write an output image if `single_image_mode` ###
+    ### TODO: Write an output image if `single_image_mode` ###
 
 
 def main():
