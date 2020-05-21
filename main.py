@@ -64,10 +64,50 @@ def build_argparser():
 
 
 def connect_mqtt():
-    ### TODO: Connect to the MQTT client ###
-    client = None
-
+    # Connect to the MQTT server
+    client = mqtt.Client()
+    client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
     return client
+
+
+def draw_bounding_boxs(coordinates, frame, wc, hc, x, k):
+    # Draw the bounding box
+
+    curr_count = 0
+    dis = x
+    for obj in coordinates[0][0]:
+
+        if obj[2] > prob_threshold:
+            xmin = int(obj[3] * wc)
+            ymin = int(obj[4] * hc)
+            xmax = int(obj[5] * wc)
+            ymax = int(obj[6] * hc)
+            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 1)
+            curr_count += 1
+            text = '{}, %: {}'.format("HUMAN", round(obj[2], 3))
+            cv2.putText(frame, text, (xmin, ymin - 7),
+                        cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 255, 0), 1)
+
+            c_x = frame.shape[1]/2
+            c_y = frame.shape[0]/2
+            mid_x = (xmax + xmin)/2
+            mid_y = (ymax + ymin)/2
+
+            # Calculating distance
+            dis = math.sqrt(math.pow(mid_x - c_x, 2) +
+                            math.pow(mid_y - c_y, 2) * 1.0)
+            k = 0
+
+    if curr_count < 1:
+        k += 1
+
+    if dis > 0 and k < 10:
+        curr_count = 1
+        k += 1
+        if k > 100:
+            k = 0
+
+    return frame, curr_count, dis, k
 
 
 def infer_on_stream(args, client):
