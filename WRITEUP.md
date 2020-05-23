@@ -1,8 +1,6 @@
 # Project Write-Up
 
-You can use this document as a template for providing your project write-up. However, if you
-have a different format you prefer, feel free to use it as long as you answer all required
-questions.
+Here is the project write up detailing important components of the project.
 
 ## Explaining Custom Layers
 
