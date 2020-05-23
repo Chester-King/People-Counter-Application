@@ -1,3 +1,4 @@
+
 """People Counter."""
 """
  Copyright (c) 2018 Intel Corporation.
@@ -27,6 +28,7 @@ import time
 import socket
 import json
 import cv2
+import math
 import logging as log
 import paho.mqtt.client as mqtt
 from argparse import ArgumentParser
@@ -111,53 +113,140 @@ def draw_bounding_boxs(coordinates, frame, wc, hc, x, k):
 
 
 def infer_on_stream(args, client):
-    """
-    Initialize the inference network, stream video to network,
-    and output stats and video.
-
-    :param args: Command line arguments parsed by `build_argparser()`
-    :param client: MQTT client
-    :return: None
-    """
-    # Initialise the class
+    # Initialise the class and assigning values to variables
     infer_network = Network()
-    # Set Probability threshold for detections
+    model = args.model
+    video_file = args.input
+    extn = args.cpu_extension
+    device = args.device
+
+    # Flag for the input image
+    iflag = False
+
+    start_time = 0
+    current_request_id = 0
+    last_count = 0
+    total_count = 0
+
+    # Load the model through `infer_network`
+    n, c, h, w = infer_network.load_model(
+        model, device, 1, 1, current_request_id, extn)[1]
+
+    # Handle the input stream
+    if video_file == 'CAM':  # live feed
+        input_stream = 0
+
+    elif video_file.endswith('.jpg') or video_file.endswith('.bmp'):    # image
+        iflag = True
+        input_stream = video_file
+
+    else:  # Video
+        input_stream = video_file
+
+    try:
+        cap = cv2.VideoCapture(video_file)
+    except FileNotFoundError:
+        print("Video file not present at the given location: " + video_file)
+    except Exception as e:
+        print("Something is wrong with the video file ", e)
+
+    global wc, hc, prob_threshold
+    total_count = 0
+    duration = 0
+
+    wc = cap.get(3)
+    hc = cap.get(4)
     prob_threshold = args.prob_threshold
+    temp = 0
+    bbx = 0
 
-    ### TODO: Load the model through `infer_network` ###
+    # Loop until stream is over
+    while cap.isOpened():
+        # Read from the video capture
+        flag, frame = cap.read()
+        if not flag:
+            break
+        key_pressed = cv2.waitKey(60)
+        # Pre-process the image as needed
 
-    ### TODO: Handle the input stream ###
+        # Preprocessing input
+        image = cv2.resize(frame, (w, h))
+        image = image.transpose((2, 0, 1))
+        image = image.reshape((n, c, h, w))
 
-    ### TODO: Loop until stream is over ###
+        # Start asynchronous inference
+        inf_start = time.time()
+        infer_network.exec_net(current_request_id, image)
 
-    ### TODO: Read from the video capture ###
+        # Wait for the result
+        if infer_network.wait(current_request_id) == 0:
+            det_time = time.time() - inf_start
 
-    ### TODO: Pre-process the image as needed ###
+            # Get the results of the inference request
+            result = infer_network.get_output(current_request_id)
 
-    ### TODO: Start asynchronous inference for specified request ###
+            # Draw Bounting Box
+            frame, current_count, d, bbx = draw_bounding_boxs(
+                result, frame, wc, hc, temp, bbx)
 
-    ### TODO: Wait for the result ###
+            # Displaying Inference Time
+            inf_time_message = "Inference time: {:.3f}ms".format(
+                det_time * 1000)
+            cv2.putText(frame, inf_time_message, (15, 15),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
 
-    ### TODO: Get the results of the inference request ###
+            # Calculating information
+            if current_count > last_count:
+                start_time = time.time()
+                total_count = total_count + current_count - last_count
+                client.publish("person", json.dumps({"total": total_count}))
 
-    ### TODO: Extract any desired stats from the results ###
+            if current_count < last_count:  # Average Time
+                duration = int(time.time() - start_time)
+                client.publish("person/duration",
+                               json.dumps({"duration": duration}))
 
-    ### TODO: Calculate and send relevant information on ###
-    ### current_count, total_count and duration to the MQTT server ###
-    ### Topic "person": keys of "count" and "total" ###
-    ### Topic "person/duration": key of "duration" ###
+            # Displaying Distance and Current count
+            text = "Distance: %d" % d
+            cv2.putText(frame, text, (15, 30),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
+            text = " Lost frame: %d" % bbx
+            cv2.putText(frame, text, (15, 45),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
+            text = "Current count: %d " % current_count
+            cv2.putText(frame, text, (15, 60),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
 
-    ### TODO: Send the frame to the FFMPEG server ###
+            if current_count > 3:
+                txt2 = "Maximum count reached :)"
+                (text_width, text_height) = cv2.getTextSize(
+                    txt2, cv2.FONT_HERSHEY_COMPLEX, 0.5, thickness=1)[0]
+                0
 
-    ### TODO: Write an output image if `single_image_mode` ###
+            client.publish("person", json.dumps(
+                {"count": current_count}))  # People Count
+
+            last_count = current_count
+            temp = d
+
+            if key_pressed == 27:
+                break
+
+        # Send the frame to the FFMPEG server
+        sys.stdout.buffer.write(frame)
+        sys.stdout.flush()
+
+        # Save the Image
+        if iflag:
+            cv2.imwrite('output_image.jpg', frame)
+
+    cap.release()
+    cv2.destroyAllWindows()
+    client.disconnect()
+    infer_network.clean()
 
 
 def main():
-    """
-    Load the network and parse the output.
-
-    :return: None
-    """
     # Grab command line args
     args = build_argparser().parse_args()
     # Connect to the MQTT server
