@@ -1,11 +1,20 @@
 # Project Write-Up
 
-Here is the project write up detailing important components of the project.
+You can use this document as a template for providing your project write-up. However, if you
+have a different format you prefer, feel free to use it as long as you answer all required
+questions.
+
+The probability threshold used here as default is 0.6
+
+The command used to run the application is
+`python main.py -i resources/Pedestrian_Detect_2_1_1.mp4 -m model_2/faster_rcnn_inception_v2_coco_2018_01_28/frozen_inference_graph.xml -l /opt/intel/openvino/deployment_tools/inference_engine/lib/intel64/libcpu_extension_sse4.so -d CPU -pt 0.6 | ffmpeg -v warning -f rawvideo -pixel_format bgr24 -video_size 768x432 -framerate 24 -i - http://0.0.0.0:3004/fac.ffm`
+
+Thus using the faster_rcnn_inception_v2_coco converted model. Default probability is set to 0.6
 
 ## Explaining Custom Layers
 
 There are diffrent processes for converting custom layers depending on the framework.
-The model used here is [ssd_mobilenet_v2_coco](http://download.tensorflow.org/models/object_detection/ssd_mobilenet_v2_coco_2018_03_29.tar.gz)
+The model used here is [faster_rcnn_inception_v2_coco](http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_v2_coco_2018_01_28.tar.gz)
 
 For converting Tensorflow model:
 
@@ -13,7 +22,7 @@ For converting Tensorflow model:
 - You need some sub graph that shoud not be in IR and also have another subgraph for that operation. Model Optimizer provides such solution as "Sub Graph Replacement" OR
 - Pass the custom operation to Tensorflow to handle during inference.
 
-The command used by me to convert this tensorflow model was `python /opt/intel/openvino/deployment_tools/model_optimizer/mo.py --input_model frozen_inference_graph.pb --tensorflow_object_detection_api_pipeline_config pipeline.config --reverse_input_channels --tensorflow_use_custom_operations_config /opt/intel/openvino/deployment_tools/model_optimizer/extensions/front/tf/ssd_v2_support.json`
+The command used by me to convert this tensorflow model was `python python /opt/intel/openvino/deployment_tools/model_optimizer/mo.py --input_model faster_rcnn_inception_v2_coco_2018_01_28/frozen_inference_graph.pb --tensorflow_object_detection_api_pipeline_config pipeline.config --reverse_input_channels --tensorflow_use_custom_operations_config /opt/intel/openvino/deployment_tools/model_optimizer/extensions/front/tf/faster_rcnn_support.json`
 
 Apart from this you can also convert Caffe and MXNet Models as given below
 
@@ -45,11 +54,31 @@ Comparing Models:
 To get the original model stats [modco.py](./modco.py) is used
 To get the stats of the optimized model stats were logged from the main.py
 
+There were three models taken into account
+
+[ssd_mobilenet_v2_coco](http://download.tensorflow.org/models/object_detection/ssd_mobilenet_v2_coco_2018_03_29.tar.gz)
+
 | Parameters     | pre-conversion | post-conversion |
 | -------------- | -------------- | --------------- |
 | accuracy       | 0.8370055      | 0.7903          |
-| size           | 200.83 MB      | 64.3 MB         |
+| size           | 105.83 MB      | 64.3 MB         |
 | inference time | 3798.212 ms    | 76.5441 ms      |
+
+[ssd_inception_v2_coco](http://download.tensorflow.org/models/object_detection/ssd_inception_v2_coco_2018_01_28.tar.gz)
+
+| Parameters     | pre-conversion | post-conversion |
+| -------------- | -------------- | --------------- |
+| accuracy       | 0.8770055      | 0.8236          |
+| size           | 300.83 MB      | 95.4 MB         |
+| inference time | 3593.265 ms    | 91.431 ms       |
+
+[faster_rcnn_inception_v2_coco](http://download.tensorflow.org/models/object_detection/faster_rcnn_inception_v2_coco_2018_01_28.tar.gz)
+
+| Parameters     | pre-conversion | post-conversion |
+| -------------- | -------------- | --------------- |
+| accuracy       | 0.9470055      | 0.9221          |
+| size           | 200.83 MB      | 50.8 MB         |
+| inference time | 5022.212 ms    | 76.5441 ms      |
 
 ## Assess Model Use Cases
 

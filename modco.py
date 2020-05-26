@@ -37,4 +37,4 @@ image = cv2.imread('resources/timage.jpg')
 
 print("PERFORMANCE OF THE ORIGINAL MODEL")
 print(test_from_frozen_graph(
-    'ssd_mobilenet_v2_coco_2018_03_29/frozen_inference_graph.pb', image))
+    'model_2/faster_rcnn_inception_v2_coco_2018_01_28/frozen_inference_graph.pb', image))

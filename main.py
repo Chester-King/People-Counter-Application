@@ -1,4 +1,3 @@
-
 """People Counter."""
 """
  Copyright (c) 2018 Intel Corporation.
@@ -22,13 +21,13 @@
 
 
 # MQTT server environment variables
-import os
-import sys
 import time
 import socket
 import json
 import cv2
-import math
+import os
+import sys
+import numpy as np
 import logging as log
 import paho.mqtt.client as mqtt
 from argparse import ArgumentParser
@@ -41,15 +40,11 @@ MQTT_KEEPALIVE_INTERVAL = 60
 
 
 def build_argparser():
-    """
-    Parse command line arguments.
-    :return: command line arguments
-    """
     parser = ArgumentParser()
-    parser.add_argument("-m", "--model", required=False, type=str, default="model_1/frozen_inference_graph.xml",
-                        help="XML file path")
+    parser.add_argument("-m", "--model", required=False, type=str,
+                        help="Path to an xml file with a trained model.", default="model_2/faster_rcnn_inception_v2_coco_2018_01_28/frozen_inference_graph.xml")
     parser.add_argument("-i", "--input", required=False, type=str, default="./resources/Pedestrian_Detect_2_1_1.mp4",
-                        help="Input file path")
+                        help="Path to image or video file")
     parser.add_argument("-l", "--cpu_extension", required=False, type=str,
                         default=None,
                         help="MKLDNN (CPU)-targeted custom layers."
@@ -60,190 +55,139 @@ def build_argparser():
                              "CPU, GPU, FPGA or MYRIAD is acceptable. Sample "
                              "will look for a suitable plugin for device "
                              "specified (CPU by default)")
-    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.5,
-                        help="Probability threshold for detections filtering - default value 0.5")
+    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.6,
+                        help="Probability threshold for detections filtering - default value 0.6")
     return parser
 
 
 def connect_mqtt():
-    # Connect to the MQTT server
+    # Connect to the MQTT client
     client = mqtt.Client()
     client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
     return client
 
 
-def draw_bounding_boxs(coordinates, frame, wc, hc, x, k):
-    # Draw the bounding box
-
-    curr_count = 0
-    dis = x
-    for obj in coordinates[0][0]:
-
-        if obj[2] > prob_threshold:
-            xmin = int(obj[3] * wc)
-            ymin = int(obj[4] * hc)
-            xmax = int(obj[5] * wc)
-            ymax = int(obj[6] * hc)
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 1)
-            curr_count += 1
-            text = '{}, %: {}'.format("HUMAN", round(obj[2], 3))
-            cv2.putText(frame, text, (xmin, ymin - 7),
-                        cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 255, 0), 1)
-
-            c_x = frame.shape[1]/2
-            c_y = frame.shape[0]/2
-            mid_x = (xmax + xmin)/2
-            mid_y = (ymax + ymin)/2
-
-            # Calculating distance
-            dis = math.sqrt(math.pow(mid_x - c_x, 2) +
-                            math.pow(mid_y - c_y, 2) * 1.0)
-            k = 0
-
-    if curr_count < 1:
-        k += 1
-
-    if dis > 0 and k < 10:
-        curr_count = 1
-        k += 1
-        if k > 100:
-            k = 0
-
-    return frame, curr_count, dis, k
-
-
 def infer_on_stream(args, client):
-    # Initialise the class and assigning values to variables
+
+    # Initialise the class
     infer_network = Network()
-    model = args.model
-    video_file = args.input
-    extn = args.cpu_extension
-    device = args.device
-
-    # Flag for the input image
-    iflag = False
-
-    start_time = 0
-    current_request_id = 0
-    last_count = 0
-    total_count = 0
-
-    # Load the model through `infer_network`
-    n, c, h, w = infer_network.load_model(
-        model, device, 1, 1, current_request_id, extn)[1]
-
-    # Handle the input stream
-    if video_file == 'CAM':  # live feed
-        input_stream = 0
-
-    elif video_file.endswith('.jpg') or video_file.endswith('.bmp'):    # image
-        iflag = True
-        input_stream = video_file
-
-    else:  # Video
-        input_stream = video_file
-
-    try:
-        cap = cv2.VideoCapture(video_file)
-    except FileNotFoundError:
-        print("Video file not present at the given location: " + video_file)
-    except Exception as e:
-        print("Something is wrong with the video file ", e)
-
-    global wc, hc, prob_threshold
-    total_count = 0
-    duration = 0
-
-    wc = cap.get(3)
-    hc = cap.get(4)
     prob_threshold = args.prob_threshold
-    temp = 0
-    bbx = 0
+    model = args.model
+    DEVICE = args.device
+    CPU_EXTENSION = args.cpu_extension
 
-    # Loop until stream is over
+    infer_network.load_model(model, CPU_EXTENSION, DEVICE)
+    network_shape = infer_network.get_input_shape()
+
+    # Checks for live feed
+    if args.input == 'CAM':
+        input_validated = 0
+
+    # Checks for input image
+    elif args.input.endswith('.jpg') or args.input.endswith('.bmp'):
+        single_image_mode = True
+        input_validated = args.input
+
+    # Checks for video file
+    else:
+        input_validated = args.input
+
+    cap = cv2.VideoCapture(input_validated)
+    cap.open(input_validated)
+
+    w = int(cap.get(3))
+    h = int(cap.get(4))
+
+    input_shape = network_shape['image_tensor']
+
+    duration_previous = 0
+    ct = 0
+    duration = 0
+    request_id = 0
+
+    report = 0
+    counter = 0
+    counter_prev = 0
+
     while cap.isOpened():
-        # Read from the video capture
         flag, frame = cap.read()
         if not flag:
             break
-        key_pressed = cv2.waitKey(60)
-        # Pre-process the image as needed
 
-        # Preprocessing input
-        image = cv2.resize(frame, (w, h))
-        image = image.transpose((2, 0, 1))
-        image = image.reshape((n, c, h, w))
+        image = cv2.resize(frame, (input_shape[3], input_shape[2]))
+        image_p = image.transpose((2, 0, 1))
+        image_p = image_p.reshape(1, *image_p.shape)
 
-        # Start asynchronous inference
+        net_input = {'image_tensor': image_p, 'image_info': image_p.shape[1:]}
+        duration_report = None
         inf_start = time.time()
-        infer_network.exec_net(current_request_id, image)
+        infer_network.exec_net(net_input, request_id)
 
-        # Wait for the result
-        if infer_network.wait(current_request_id) == 0:
+        if infer_network.wait() == 0:
             det_time = time.time() - inf_start
+            net_output = infer_network.get_output()
+            pointer = 0
+            probs = net_output[0, 0, :, 2]
+            text = ""
+            for i, p in enumerate(probs):
+                if p > prob_threshold:
+                    pointer += 1
+                    box = net_output[0, 0, i, 3:]
+                    p1 = (int(box[0] * w), int(box[1] * h))
+                    p2 = (int(box[2] * w), int(box[3] * h))
+                    frame = cv2.rectangle(frame, p1, p2, (0, 0, 255), 2)
+                    text = '{}, %: {}'.format("HUMAN", round(p, 3))
 
-            # Get the results of the inference request
-            result = infer_network.get_output(current_request_id)
-
-            # Draw Bounting Box
-            frame, current_count, d, bbx = draw_bounding_boxs(
-                result, frame, wc, hc, temp, bbx)
-
-            # Displaying Inference Time
             inf_time_message = "Inference time: {:.3f}ms".format(
                 det_time * 1000)
-            cv2.putText(frame, inf_time_message, (15, 15),
+            cv2.putText(frame, text, (int(
+                box[0] * w), int(box[2] * w) - 7), cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 255, 0), 1)
+            cv2.putText(frame, inf_time_message, (15, 45),
                         cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
+            if pointer != counter:
+                counter_prev = counter
+                counter = pointer
+                if duration >= 3:
+                    duration_previous = duration
+                    duration = 0
+                else:
+                    duration = duration_previous + duration
+                    duration_previous = 0  # unknown, not needed in this case
+            else:
+                duration += 1
+                if duration >= 3:
+                    report = counter
+                    if duration == 3 and counter > counter_prev:
+                        ct += counter - counter_prev
+                    elif duration == 3 and counter < counter_prev:
+                        duration_report = int(
+                            (duration_previous / 10.0) * 1000)
 
-            # Calculating information
-            if current_count > last_count:
-                start_time = time.time()
-                total_count = total_count + current_count - last_count
-                client.publish("person", json.dumps({"total": total_count}))
-
-            if current_count < last_count:  # Average Time
-                duration = int(time.time() - start_time)
-                client.publish("person/duration",
-                               json.dumps({"duration": duration}))
-
-            # Displaying Distance and Current count
-            text = "Distance: %d" % d
+            # current_count, total_count and duration to the MQTT server
+            client.publish('person',
+                           payload=json.dumps({
+                               'count': report, 'total': ct}),
+                           qos=0, retain=False)
+            if duration_report is not None:
+                client.publish('person/duration',
+                               payload=json.dumps(
+                                   {'duration': duration_report}),
+                               qos=0, retain=False)
+            text = "Current count: %d " % report
+            cv2.putText(frame, text, (15, 15),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
+            text = "Total count: %d " % ct
             cv2.putText(frame, text, (15, 30),
                         cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
-            text = " Lost frame: %d" % bbx
-            cv2.putText(frame, text, (15, 45),
-                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
-            text = "Current count: %d " % current_count
-            cv2.putText(frame, text, (15, 60),
-                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
 
-            if current_count > 3:
-                txt2 = "Maximum count reached :)"
-                (text_width, text_height) = cv2.getTextSize(
-                    txt2, cv2.FONT_HERSHEY_COMPLEX, 0.5, thickness=1)[0]
-                0
-
-            client.publish("person", json.dumps(
-                {"count": current_count}))  # People Count
-
-            last_count = current_count
-            temp = d
-
-            if key_pressed == 27:
-                break
-
-        # Send the frame to the FFMPEG server
+        # Send the frame to the FFMPEG server ###
+        #  Resize the frame
+        frame = cv2.resize(frame, (768, 432))
         sys.stdout.buffer.write(frame)
         sys.stdout.flush()
 
-        # Save the Image
-        if iflag:
-            cv2.imwrite('output_image.jpg', frame)
-
     cap.release()
     cv2.destroyAllWindows()
-    client.disconnect()
-    infer_network.clean()
 
 
 def main():
