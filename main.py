@@ -21,17 +21,17 @@
 
 
 # MQTT server environment variables
+import os
+import sys
 import time
 import socket
 import json
-import cv2
-import os
-import sys
-import numpy as np
+import cv2 as cv
 import logging as log
 import paho.mqtt.client as mqtt
 from argparse import ArgumentParser
 from inference import Network
+import numpy as np
 HOSTNAME = socket.gethostname()
 IPADDRESS = socket.gethostbyname(HOSTNAME)
 MQTT_HOST = IPADDRESS
@@ -40,10 +40,14 @@ MQTT_KEEPALIVE_INTERVAL = 60
 
 
 def build_argparser():
+    """
+    Parse command line arguments.
+    :return: command line arguments
+    """
     parser = ArgumentParser()
     parser.add_argument("-m", "--model", required=False, type=str,
-                        help="Path to an xml file with a trained model.", default="model_2/faster_rcnn_inception_v2_coco_2018_01_28/frozen_inference_graph.xml")
-    parser.add_argument("-i", "--input", required=False, type=str, default="./resources/Pedestrian_Detect_2_1_1.mp4",
+                        default='person-detection-retail-0013.xml', help="Path to an xml file with a trained model.")
+    parser.add_argument("-i", "--input", required=False, default='resources/Pedestrian_Detect_2_1_1.mp4', type=str,
                         help="Path to image or video file")
     parser.add_argument("-l", "--cpu_extension", required=False, type=str,
                         default=None,
@@ -55,146 +59,184 @@ def build_argparser():
                              "CPU, GPU, FPGA or MYRIAD is acceptable. Sample "
                              "will look for a suitable plugin for device "
                              "specified (CPU by default)")
-    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.6,
-                        help="Probability threshold for detections filtering - default value 0.6")
+    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.5,
+                        help="Probability threshold for detections filtering"
+                        "(0.5 by default)")
     return parser
 
 
 def connect_mqtt():
-    # Connect to the MQTT client
+    ### DONE: Connect to the MQTT client ###
     client = mqtt.Client()
     client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
     return client
 
 
 def infer_on_stream(args, client):
+    """
+    Initialize the inference network, stream video to network,
+    and output stats and video.
+    :param args: Command line arguments parsed by `build_argparser()`
+    :param client: MQTT client
+    :return: None
+    """
+    dt = {}
 
     # Initialise the class
-    infer_network = Network()
+    Netw = Network()
+
+    # Set Probability threshold for detections
     prob_threshold = args.prob_threshold
+
+    # variables for holding argument values
     model = args.model
-    DEVICE = args.device
-    CPU_EXTENSION = args.cpu_extension
+    inp_vid = args.input
+    ext = args.cpu_extension
+    dev_used = args.device
 
-    infer_network.load_model(model, CPU_EXTENSION, DEVICE)
-    network_shape = infer_network.get_input_shape()
+    # extra variable for use
+    start_time = 0
+    creq_id = 0
+    last_count = 0
+    total_count = 0
+    ### TODO: Load the model through `infer_network` ###
 
-    # Checks for live feed
-    if args.input == 'CAM':
-        input_validated = 0
+    n, c, h, w = Netw.load_model(dev_used, model, creq_id, ext)[1]
 
-    # Checks for input image
-    elif args.input.endswith('.jpg') or args.input.endswith('.bmp'):
-        single_image_mode = True
-        input_validated = args.input
+    imf = False  # flag to determine if input is image or video
 
-    # Checks for video file
+    ### TODO: Handle the input stream ###
+
+    if(inp_vid == '0'):
+        stre = 0
+    elif(inp_vid[:-4] == '.png' or inp_vid[:-4] == '.jpg' or inp_vid[:-4] == '.bmp' or inp_vid[:-4] == 'jpeg'):
+        imf = True  # it is a image
+        stre = inp_vid
     else:
-        input_validated = args.input
+        stre = inp_vid
 
-    cap = cv2.VideoCapture(input_validated)
-    cap.open(input_validated)
+    try:
+        cap = cv.VideoCapture(stre)
+    except(FileNotFoundError):
+        print("Maybe wrong input path")
+    except(Exception):
+        print("Something went wrong ", Exception)
 
-    w = int(cap.get(3))
-    h = int(cap.get(4))
+#     print(cap, '--')
 
-    input_shape = network_shape['image_tensor']
+    # Needed
 
-    duration_previous = 0
-    ct = 0
-    duration = 0
-    request_id = 0
+    ### DONE: Loop until stream is over ###
 
-    report = 0
-    counter = 0
-    counter_prev = 0
-
-    while cap.isOpened():
-        flag, frame = cap.read()
-        if not flag:
+    wide_c = cap.get(3)
+    height_c = cap.get(4)
+    probs = args.prob_threshold
+    p_count = 0
+    tcount = 0
+    tf = 0
+    while(cap.isOpened()):
+        tf += 1
+        k = cap.read()
+        if not k[0]:
             break
+        pi = k[1]
+        ### TODO: Read from the video capture ###
 
-        image = cv2.resize(frame, (input_shape[3], input_shape[2]))
-        image_p = image.transpose((2, 0, 1))
-        image_p = image_p.reshape(1, *image_p.shape)
+        ### TODO: Pre-process the image as needed ###
+        im_frame = cv.resize(k[1], (w, h))
+        im_frame = im_frame.transpose((2, 0, 1))
+        im_frame = im_frame.reshape((n, c, h, w))
+        ### TODO: Start asynchronous inference for specified request ###
 
-        net_input = {'image_tensor': image_p, 'image_info': image_p.shape[1:]}
-        duration_report = None
-        inf_start = time.time()
-        infer_network.exec_net(net_input, request_id)
+        inf_init = time.time()
+        Netw.exec_net(creq_id, im_frame)
 
-        if infer_network.wait() == 0:
-            det_time = time.time() - inf_start
-            net_output = infer_network.get_output()
-            pointer = 0
-            probs = net_output[0, 0, :, 2]
-            text = ""
-            for i, p in enumerate(probs):
-                if p > prob_threshold:
-                    pointer += 1
-                    box = net_output[0, 0, i, 3:]
-                    p1 = (int(box[0] * w), int(box[1] * h))
-                    p2 = (int(box[2] * w), int(box[3] * h))
-                    frame = cv2.rectangle(frame, p1, p2, (0, 0, 255), 2)
-                    text = '{}, %: {}'.format("HUMAN", round(p, 3))
+        ### DONE: Wait for the result ###
+#         print('Hello')
 
-            inf_time_message = "Inference time: {:.3f}ms".format(
-                det_time * 1000)
-            cv2.putText(frame, text, (int(
-                box[0] * w), int(box[2] * w) - 7), cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 255, 0), 1)
-            cv2.putText(frame, inf_time_message, (15, 45),
-                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
-            if pointer != counter:
-                counter_prev = counter
-                counter = pointer
-                if duration >= 3:
-                    duration_previous = duration
-                    duration = 0
-                else:
-                    duration = duration_previous + duration
-                    duration_previous = 0  # unknown, not needed in this case
+        if(Netw.wait(creq_id) == 0):
+            inf_det = time.time()-inf_init
+            inf_det = float(int(100000*inf_det))/100
+            cv.putText(pi, "Inference Time : "+str(inf_det)+"ms", (25, 50),
+                       cv.FONT_HERSHEY_PLAIN, 0.8, (0, 255, 0), 1)
+            ### DONE: Get the results of the inference request ###
+            results = Netw.get_output(creq_id)
+            c_count = 0
+            for x in results[0][0]:
+                t_v1 = 0
+                t_v2 = 0
+                if(x[2] >= prob_threshold):
+                    xmin = int(x[3] * wide_c)
+                    t_v1 = xmin
+                    ymin = int(x[4] * height_c)
+                    t_v2 = ymin
+                    xmax = int(x[5] * wide_c)
+                    ymax = int(x[6] * height_c)
+                    cv.rectangle(pi, (xmin, ymin),
+                                 (xmax, ymax), (0, 0, 255), 1)
+                    c_count += 1
+                cv.putText(pi, "Human "+str(x[2]), (t_v1, t_v2 - 7),
+                           cv.FONT_HERSHEY_PLAIN, 0.8, (0, 255, 0), 1)
+                cv.putText(pi, "Current Count : "+str(c_count), (25, 25),
+                           cv.FONT_HERSHEY_PLAIN, 0.8, (0, 255, 0), 1)
+
+            client.publish("person", json.dumps(
+                {"count": c_count}))  # People Count
+#             client.publish("person", json.dumps({"total": total_count}))
+#             log.basicConfig(level=os.environ.get("LOGLEVEL", dt))
+            if(c_count >= p_count):
+                dt[c_count] = time.time()
+                tf = 0
+
+                p_count = c_count
             else:
-                duration += 1
-                if duration >= 3:
-                    report = counter
-                    if duration == 3 and counter > counter_prev:
-                        ct += counter - counter_prev
-                    elif duration == 3 and counter < counter_prev:
-                        duration_report = int(
-                            (duration_previous / 10.0) * 1000)
+                if(tf == 4):  # Frame Buffer
+                    u = p_count-c_count
+                    total_count += u
+                    pre = str(dt)
+                    t_m = int(time.time()-dt[p_count-1])
+                    t_m *= 1.78  # offset
+                    client.publish("person/duration",
+                                   json.dumps({"duration": t_m}))
 
-            # current_count, total_count and duration to the MQTT server
-            client.publish('person',
-                           payload=json.dumps({
-                               'count': report, 'total': ct}),
-                           qos=0, retain=False)
-            if duration_report is not None:
-                client.publish('person/duration',
-                               payload=json.dumps(
-                                   {'duration': duration_report}),
-                               qos=0, retain=False)
-            text = "Current count: %d " % report
-            cv2.putText(frame, text, (15, 15),
-                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
-            text = "Total count: %d " % ct
-            cv2.putText(frame, text, (15, 30),
-                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 155, 0), 1)
+                    p_count = c_count
+                    c_count = 0
 
-        # Send the frame to the FFMPEG server ###
-        #  Resize the frame
-        frame = cv2.resize(frame, (768, 432))
-        sys.stdout.buffer.write(frame)
+
+#                 client.publish("person", json.dumps({"total": total_count})) This is actually useless. This key doesn't make a difference
+
+            ### DONE: Extract any desired stats from the results ###
+#         sys.stdout.buffer.write( np.ascontiguousarray(pi, dtype=np.float32)) this is giving very strange results
+        sys.stdout.buffer.write(pi)
         sys.stdout.flush()
 
+        ### DONE: Calculate and send relevant information on ###
+        ### current_count, total_count and duration to the MQTT server ###
+        # Topic "person": keys of "count" and "total" ###  this DO NOT work
+        ### Topic "person/duration": key of "duration" ###
+
+        ### DONE: Send the frame to the FFMPEG server ###
+
+        ### TODO: Write an output image if `single_image_mode` ###
     cap.release()
-    cv2.destroyAllWindows()
+    cv.destroyAllWindows()
+    client.disconnect()
+    # cleaning
+    del Netw.net_plugin
+    del Netw.network
 
 
 def main():
+    """
+    Load the network and parse the output.
+    :return: None
+    """
     # Grab command line args
     args = build_argparser().parse_args()
+
     # Connect to the MQTT server
     client = connect_mqtt()
+
     # Perform inference on the input stream
     infer_on_stream(args, client)
 

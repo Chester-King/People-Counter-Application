@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
  Copyright (c) 2018 Intel Corporation.
-
  Permission is hereby granted, free of charge, to any person obtaining
  a copy of this software and associated documentation files (the
  "Software"), to deal in the Software without restriction, including
@@ -9,10 +8,8 @@
  distribute, sublicense, and/or sell copies of the Software, and to
  permit persons to whom the Software is furnished to do so, subject to
  the following conditions:
-
  The above copyright notice and this permission notice shall be
  included in all copies or substantial portions of the Software.
-
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
@@ -35,73 +32,76 @@ class Network:
     """
 
     def __init__(self):
-        ### TODO: Initialize any class variables desired ###
-        self.plugin = None
+        ### DONE: Initialize any class variables desired ###
         self.network = None
         self.input_blob = None
         self.output_blob = None
-        self.exec_network = None
-        self.infer_request = None
-
-    def load_model(self, model, CPU_EXTENSION, DEVICE, console_output=False):
-        ### TODO: Load the model ###
-        model_xml = model
-        model_bin = os.path.splitext(model_xml)[0] + ".bin"
-
+        self.net_plugin = None
         self.plugin = IECore()
-        self.network = IENetwork(model=model_xml, weights=model_bin)
-        ### TODO: Check for supported layers ###
-        if not all_layers_supported(self.plugin, self.network, console_output=console_output):
-            self.plugin.add_extension(CPU_EXTENSION, DEVICE)
 
-        self.exec_network = self.plugin.load_network(self.network, DEVICE)
-        # Get the input layer
-        self.input_blob = next(iter(self.network.inputs))
-        self.output_blob = next(iter(self.network.outputs))
+        self.infer_request_handle = None
+
+    def load_model(self, dev_used, mod_xml, num_req, ext=None):
+
+        mod_bin = mod_xml[:-4] + ".bin"  # replacing .xml with .bin
+#         print(ext)
+        if ext and 'CPU' in dev_used:
+            self.plugin.add_extension(ext, "CPU")
+
+        ### DONE: Load the model ###
+
+        self.network = IENetwork(model=mod_xml, weights=mod_bin)
+
+        ### DONE: Check for supported layers ###
+
+        if "CPU" in dev_used:
+            supported_layers = self.plugin.query_network(self.network, "CPU")
+            not_supported_layers = [
+                lay for lay in self.network.layers.keys() if lay not in supported_layers]
+            if len(not_supported_layers) != 0:
+                sys.exit(1)
+
+        ### DONE: Add any necessary extensions ###
+
+        if ext and "CPU" in dev_used:
+            self.plugin.add_extension(ext, "CPU")
 
         ### TODO: Return the loaded inference plugin ###
-        ### Note: You may need to update the function parameters. ###
-        return
+        if(num_req == 0):
+            self.net_plugin = self.plugin.load_network(
+                network=self.network, device_name=dev_used)
+        else:
+            self.net_plugin = self.plugin.load_network(
+                network=self.network, device_name=dev_used, num_requests=num_req)
+
+        ### DONE: Note: You may need to update the function parameters. ###
+
+        return(self.plugin, self.get_input_shape())
 
     def get_input_shape(self):
-        ### TODO: Return the shape of the input layer ###
-        input_shapes = {}
-        for inp in self.network.inputs:
-            input_shapes[inp] = (self.network.inputs[inp].shape)
-        return input_shapes
+        ### DONE: Return the shape of the input layer ###
 
-    def exec_net(self, net_input, request_id):
-        ### TODO: Start an asynchronous request ###
-        ### TODO: Return any necessary information ###
-        self.infer_request_handle = self.exec_network.start_async(
-            request_id,
-            inputs=net_input)
+        self.input_blob = next(iter(self.network.inputs))
+        sh = self.network.inputs[self.input_blob].shape
+        return(sh)
 
-        return
+    def exec_net(self, creq_id, frame):
+        self.infer_request_handle = self.net_plugin.start_async(
+            request_id=creq_id, inputs={self.input_blob: frame})
+        ### DONE: Start an asynchronous request ###
+        return(self.net_plugin)
 
-    def wait(self):
+    def wait(self, creq_id):
         ### TODO: Wait for the request to be complete. ###
         ### TODO: Return any necessary information ###
+        i_state = self.net_plugin.requests[creq_id].wait(-1)
+        return(i_state)
         ### Note: You may need to update the function parameters. ###
-        status = self.infer_request_handle.wait()
-        return status
+        return
 
-    def get_output(self):
+    def get_output(self, creq_id):
         # TODO: Extract and return the output results
+
         ### Note: You may need to update the function parameters. ###
-        out = self.infer_request_handle.outputs[self.output_blob]
-        return out
 
-
-def all_layers_supported(engine, network, console_output=False):
-    # TODO check if all layers are supported
-    # return True if all supported, False otherwise
-    layers_supported = engine.query_network(network, device_name='CPU')
-    layers = network.layers.keys()
-
-    all_supported = True
-    for l in layers:
-        if l not in layers_supported:
-            all_supported = False
-
-    return all_supported
+        return(self.net_plugin.requests[creq_id].outputs['detection_out'])
